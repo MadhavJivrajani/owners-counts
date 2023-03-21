@@ -34,9 +34,10 @@ func main() {
 
 	owners := getOwnersRoots(ctx, group)
 	oc := &ownerCounter{
-		ownerPaths: map[string]string{},
-		reviewers:  sets.Set[string]{},
-		approvers:  sets.Set[string]{},
+		ownerPaths:  map[string]string{},
+		reviewers:   sets.Set[string]{},
+		approvers:   sets.Set[string]{},
+		ghUserCache: map[string]bool{},
 	}
 	tmpPath, err := cloneRepos(oc.getReposToClone(owners))
 	if len(tmpPath) > 0 {
@@ -98,6 +99,7 @@ type ownerCounter struct {
 	// owner URL -> repo path mapping
 	ownerPaths           map[string]string
 	reviewers, approvers sets.Set[string]
+	ghUserCache          map[string]bool
 }
 
 func (oc *ownerCounter) getReposToClone(owners []string) []string {
@@ -168,6 +170,7 @@ func (oc *ownerCounter) getCounts(path string) error {
 			kubeAliasPath, _ := GetOwnersAliasesFile(filepath.Join("..", "kubernetes"))
 			kubeAlias, _ = GetOwnerAliases(kubeAliasPath)
 		}
+		log.Println(">>> Processing repo", repoPath)
 		for _, ownerFile := range owners {
 			info, err := GetOwnersInfo(ownerFile)
 			if err != nil {
@@ -196,7 +199,7 @@ func (oc *ownerCounter) computeCount(reviewers, approvers []string, alias, kubeA
 			if !ok {
 				// We assume that if the value isn't an alias, it is
 				// a username. Check if it is a valid GH user.
-				if checkIfValidGHUser(entity) {
+				if oc.checkIfValidGHUser(entity) {
 					oc.reviewers.Insert(entity)
 				} else {
 					log.Println("!!!! invalid entity", entity)
@@ -216,7 +219,7 @@ func (oc *ownerCounter) computeCount(reviewers, approvers []string, alias, kubeA
 			if !ok {
 				// We assume that if the value isn't an alias, it is
 				// a username. Check if it is a valid GH user.
-				if checkIfValidGHUser(entity) {
+				if oc.checkIfValidGHUser(entity) {
 					oc.approvers.Insert(entity)
 				} else {
 					log.Println("!!!! invalid entity", entity)
@@ -228,14 +231,20 @@ func (oc *ownerCounter) computeCount(reviewers, approvers []string, alias, kubeA
 	}
 }
 
-func checkIfValidGHUser(user string) bool {
+func (oc *ownerCounter) checkIfValidGHUser(user string) bool {
+	// check if we have already queried github for this user.
+	if isValid, ok := oc.ghUserCache[user]; ok {
+		return isValid
+	}
 	client := &http.Client{}
 	req, _ := http.NewRequest("GET", fmt.Sprintf("https://api.github.com/users/%s", user), nil)
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("Authorization", fmt.Sprintf("Bearer %s", ghToken))
 	resp, err := client.Do(req)
 
-	return err == nil && resp.StatusCode == 200
+	// cache query result for this user.
+	oc.ghUserCache[user] = err == nil && resp.StatusCode == http.StatusOK
+	return oc.ghUserCache[user]
 }
 
 func isRepoKube(path string) bool {
