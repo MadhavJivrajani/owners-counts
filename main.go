@@ -55,7 +55,7 @@ func main() {
 	fmt.Println("Approvers:", oc.approvers.Len())
 }
 
-func cloneRepos(toClone []string) (string, error) {
+func cloneRepos(toClone map[string]string) (string, error) {
 	path, err := os.MkdirTemp("", "ownerscount")
 	if err != nil {
 		return path, err
@@ -67,9 +67,11 @@ func cloneRepos(toClone []string) (string, error) {
 		return path, err
 	}
 
-	for _, repo := range toClone {
-		err = exec.Command("git", "clone", repo, "--depth", "1").Run()
+	for cloneURL, pathName := range toClone {
+		log.Println(">>> cloning", cloneURL, "at", pathName)
+		err = exec.Command("git", "clone", cloneURL, pathName, "--depth", "1").Run()
 		if err != nil {
+			log.Println("!!!! error cloning", cloneURL, "at", pathName)
 			return path, err
 		}
 	}
@@ -102,14 +104,15 @@ type ownerCounter struct {
 	ghUserCache          map[string]bool
 }
 
-func (oc *ownerCounter) getReposToClone(owners []string) []string {
-	toClone := sets.NewString()
+func (oc *ownerCounter) getReposToClone(owners []string) map[string]string {
+	toClone := map[string]string{}
 	for _, owner := range owners {
-		oc.ownerPaths[owner] = getRepo(owner)
-		toClone.Insert(sshCloneURL(owner))
+		qualifiedRepoName := getRepoName(owner)
+		oc.ownerPaths[owner] = qualifiedRepoName
+		toClone[sshCloneURL(owner)] = qualifiedRepoName
 	}
 
-	return toClone.List()
+	return toClone
 }
 
 func (oc *ownerCounter) getCounts(path string) error {
@@ -147,7 +150,7 @@ func (oc *ownerCounter) getCounts(path string) error {
 			return fmt.Errorf("cannot get owners files %w", err)
 		}
 		var aliasRoot string
-		if isRepoKube(url) {
+		if subprojectInSubDir(url) {
 			aliasRoot = "."
 		} else {
 			aliasRoot = root
@@ -167,7 +170,7 @@ func (oc *ownerCounter) getCounts(path string) error {
 		if isRepoKube(url) {
 			kubeAlias = alias
 		} else {
-			kubeAliasPath, _ := GetOwnersAliasesFile(filepath.Join("..", "kubernetes"))
+			kubeAliasPath, _ := GetOwnersAliasesFile(filepath.Join("..", "kubernetes-org-kubernetes"))
 			kubeAlias, _ = GetOwnerAliases(kubeAliasPath)
 		}
 		log.Println(">>> Processing repo", repoPath)
@@ -195,16 +198,18 @@ func (oc *ownerCounter) computeCount(reviewers, approvers []string, alias, kubeA
 		if !ok {
 			// Maybe it exists in kubeAlias because of the
 			// staging magic.
-			aliases, ok = kubeAlias.RepoAliases[entity]
-			if !ok {
-				// We assume that if the value isn't an alias, it is
-				// a username. Check if it is a valid GH user.
-				if oc.checkIfValidGHUser(entity) {
-					oc.reviewers.Insert(entity)
-				} else {
-					log.Println("!!!! invalid entity", entity)
+			if kubeAlias != nil {
+				aliases, ok = kubeAlias.RepoAliases[entity]
+				if !ok {
+					// We assume that if the value isn't an alias, it is
+					// a username. Check if it is a valid GH user.
+					if oc.checkIfValidGHUser(entity) {
+						oc.reviewers.Insert(entity)
+					} else {
+						log.Println("!!!! invalid entity", entity)
+					}
+					continue
 				}
-				continue
 			}
 		}
 		oc.reviewers.Insert(aliases...)
@@ -215,16 +220,18 @@ func (oc *ownerCounter) computeCount(reviewers, approvers []string, alias, kubeA
 		if !ok {
 			// Maybe it exists in kubeAlias because of the
 			// staging magic.
-			aliases, ok = kubeAlias.RepoAliases[entity]
-			if !ok {
-				// We assume that if the value isn't an alias, it is
-				// a username. Check if it is a valid GH user.
-				if oc.checkIfValidGHUser(entity) {
-					oc.approvers.Insert(entity)
-				} else {
-					log.Println("!!!! invalid entity", entity)
+			if kubeAlias != nil {
+				aliases, ok = kubeAlias.RepoAliases[entity]
+				if !ok {
+					// We assume that if the value isn't an alias, it is
+					// a username. Check if it is a valid GH user.
+					if oc.checkIfValidGHUser(entity) {
+						oc.approvers.Insert(entity)
+					} else {
+						log.Println("!!!! invalid entity", entity)
+					}
+					continue
 				}
-				continue
 			}
 		}
 		oc.approvers.Insert(aliases...)

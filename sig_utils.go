@@ -213,13 +213,24 @@ func getPath(url string) string {
 	return string(url[mat[8]:])
 }
 
-func getRepo(url string) string {
+func getRepoName(url string) string {
 	re := regexp.MustCompile(regexRawGitHubURL)
 	mat := re.FindStringSubmatchIndex(url)
 	if mat == nil {
 		return url
 	}
-	return strings.Split(string(url[mat[4]:]), string(os.PathSeparator))[0]
+	elements := strings.Split(string(url[mat[2]:]), string(os.PathSeparator))
+	return elements[0] + "-" + "org" + "-" + elements[1]
+
+}
+
+func subprojectInSubDir(url string) bool {
+	re := regexp.MustCompile(regexRawGitHubURL)
+	mat := re.FindStringSubmatchIndex(url)
+	if mat == nil {
+		return false
+	}
+	return len(strings.Split(string(url[mat[6]:]), string(os.PathSeparator))) != 2
 }
 
 // readSigsYaml decodes yaml stored in a file at path into the
