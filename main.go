@@ -34,10 +34,11 @@ func main() {
 
 	owners := getOwnersRoots(ctx, group)
 	oc := &ownerCounter{
-		ownerPaths:  map[string]string{},
-		reviewers:   sets.Set[string]{},
-		approvers:   sets.Set[string]{},
-		ghUserCache: map[string]bool{},
+		ownerPaths:        map[string]string{},
+		reviewers:         sets.Set[string]{},
+		approvers:         sets.Set[string]{},
+		ghUserCache:       map[string]bool{},
+		insufficientCount: insufficientOwnersTracker{ownerCount: map[string]int{}},
 	}
 	tmpPath, err := cloneRepos(oc.getReposToClone(owners))
 	if len(tmpPath) > 0 {
@@ -53,6 +54,10 @@ func main() {
 
 	fmt.Println("Reviewers:", oc.reviewers.Len())
 	fmt.Println("Approvers:", oc.approvers.Len())
+	fmt.Println("\n Insufficient OWNERs counts:")
+	for path, count := range oc.insufficientCount.ownerCount {
+		fmt.Println("\tPath:", path, "Count:", count)
+	}
 }
 
 func cloneRepos(toClone map[string]string) (string, error) {
@@ -102,6 +107,11 @@ type ownerCounter struct {
 	ownerPaths           map[string]string
 	reviewers, approvers sets.Set[string]
 	ghUserCache          map[string]bool
+	insufficientCount    insufficientOwnersTracker
+}
+
+type insufficientOwnersTracker struct {
+	ownerCount map[string]int
 }
 
 func (oc *ownerCounter) getReposToClone(owners []string) map[string]string {
@@ -174,6 +184,7 @@ func (oc *ownerCounter) getCounts(path string) error {
 			kubeAlias, _ = GetOwnerAliases(kubeAliasPath)
 		}
 		log.Println(">>> Processing repo", repoPath)
+		totalReviewers, totalApprovers := sets.String{}, sets.String{}
 		for _, ownerFile := range owners {
 			info, err := GetOwnersInfo(ownerFile)
 			if err != nil {
@@ -181,8 +192,14 @@ func (oc *ownerCounter) getCounts(path string) error {
 				continue
 			}
 			reviewers := sets.
-				NewString(info.Reviewers...).Union(sets.NewString(info.RequiredReviewers...)).List()
-			oc.computeCount(reviewers, info.Approvers, alias, kubeAlias)
+				NewString(info.Reviewers...).Union(sets.NewString(info.RequiredReviewers...))
+			totalReviewers = totalReviewers.Union(reviewers)
+			totalApprovers = totalApprovers.Union(sets.NewString(info.Approvers...))
+			oc.computeCount(reviewers.List(), info.Approvers, alias, kubeAlias)
+		}
+		totalOwners := totalReviewers.Len() + totalApprovers.Len()
+		if totalOwners > 0 && totalOwners <= 2 {
+			oc.insufficientCount.ownerCount[url] = totalOwners
 		}
 		// Go back to the tmp dir for the next repo
 		if err := os.Chdir(".."); err != nil {
